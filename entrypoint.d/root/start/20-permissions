@@ -1,0 +1,29 @@
+#!/bin/bash
+
+ADM_USER=manzolo
+ADM_PASSWD=$(grep -E "^$ADM_USER:" /etc/passwd)
+ADM_UID=$(echo "$ADM_PASSWD" | cut -d':' -f3)
+ADM_HOME=$(echo "$ADM_PASSWD" | cut -d':' -f6)
+
+set_local_permissions() {
+    EXCLUDE_MOUNTS="$( \
+          mount \
+            | sed -n -E "s#^[^ ]+ on ($1.+?) type.+#\\1#p" \
+            | sed -E "s#.+#-not -path '\\0' -not -path '\\0/*'#" \
+            | tr $"\n" " " \
+        )"
+
+    eval find "$1" $EXCLUDE_MOUNTS -not -user "$ADM_USER" -print0 2>/dev/null \
+      | xargs -0 -r chown "$ADM_USER:$ADM_USER"
+}
+
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u $ADM_USER)}"
+
+set_local_permissions '/home/manzolo'
+set_local_permissions "$XDG_RUNTIME_DIR"
+
+for d in $(echo "$USER_DIRS" | tr ':' $'\n'); do
+    chown -R "$ADM_USER:$ADM_USER" "$d"
+done
+
+echo "Permissions start" >> /home/manzolo/retropie-docker.log

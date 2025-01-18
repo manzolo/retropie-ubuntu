@@ -1,0 +1,151 @@
+#!/bin/sh
+
+echo "Nvidia driver start" >> /home/manzolo/retropie-docker.log
+
+debug() {
+    if [ "${ENTRYPOINT_DEBUG:-0}" != "1" ]; then
+        return
+    fi
+
+    echo "DEBUG: $1" >&2
+}
+
+IS_NVIDIA_MOUNT=0
+
+for d in /usr/local/nvidia/lib /usr/local/nvidia/lib64 /nvidia; do
+    if [ -d "$d" ]; then
+        echo "$d" >>/etc/ld.so.conf.d/nvidia.conf
+        IS_NVIDIA_MOUNT=1
+    fi
+done
+
+if [ $IS_NVIDIA_MOUNT = 1 ]; then
+    debug 'updating ldconfig with mounted nvidia library paths'
+    ldconfig
+
+    exit
+fi
+
+# abort if user requested skip download
+if [ "${NVIDIA_SKIP_DOWNLOAD:-0}" = "1" ]; then
+    debug 'skipping nvidia driver check NVIDIA_SKIP_DOWNLOAD=1'
+
+    exit
+fi
+
+# abort if nvidia driver not found
+if [ ! -f /proc/driver/nvidia/version ]; then
+    debug 'file not found: /proc/driver/nvidia/version'
+
+    exit
+fi
+
+HOST_DRIVER_VERSION=$(cat /proc/driver/nvidia/version | sed -nE 's/.*Module[ \t]+([0-9]+(\.[0-9]+)?).*/\1/p')
+
+# Se la versione non è trovata, prova un altro metodo (ad esempio dall'output di 'nvidia-smi')
+if [ -z "$HOST_DRIVER_VERSION" ]; then
+    echo "Versione driver non trovata in /proc/driver/nvidia/version. Verifico in altre fonti..."
+    echo "NixOS..."
+    HOST_DRIVER_VERSION=$(cat /proc/driver/nvidia/version | head -n 1 | awk '{print $10}')
+
+    if [ -z "$HOST_DRIVER_VERSION" ]; then
+        echo "Impossibile trovare la versione del driver NVIDIA."
+        exit 1
+    fi
+fi
+
+if [ -z "$HOST_DRIVER_VERSION" ]; then
+    echo "Unable to detect host nvidia driver version" >&2
+    echo "Please contact image maintainer" >&2
+    echo "https://github.com/andrewmackrodt/dockerfiles/issues" >&2
+
+    exit
+fi
+
+CONTAINER_DRIVER_VERSION=$( \
+    dpkg -l \
+        | awk '$1 == "ii" && $2 ~ "libnvidia-gl-" { print $3 }' \
+        | sed -nE 's/^([0-9]+(\.[0-9]+)?).*/\1/p' \
+        | head -n1 \
+    )
+
+if [ -z "$CONTAINER_DRIVER_VERSION" ]; then
+    echo "Unable to detect container nvidia driver version" >&2
+    echo "Please contact image maintainer" >&2
+    echo "https://github.com/andrewmackrodt/dockerfiles/issues" >&2
+
+    exit
+fi
+
+# abort if drivers match
+if [ "$HOST_DRIVER_VERSION" = "$CONTAINER_DRIVER_VERSION" ]; then
+    debug "nvidia driver match $HOST_DRIVER_VERSION"
+
+    exit
+fi
+
+{
+    echo "nvidia driver mismatch Host($HOST_DRIVER_VERSION) <=> Container($CONTAINER_DRIVER_VERSION)"
+    echo "Automatic driver match will be attempted ..."
+} | tee /dev/stderr | sudo -E -u \#${PUID:-1000} notify-send -u critical -i error "$(cat -)"
+
+HOST_DRIVER_MAJOR_VERSION=$(echo "$HOST_DRIVER_VERSION" | sed -E 's/\..+//')
+
+export DEBIAN_FRONTEND=noninteractive
+
+# update package lists
+apt-get update -qq
+
+PACKAGE_NAME="libnvidia-gl-$HOST_DRIVER_MAJOR_VERSION"
+
+MAJOR_PACKAGE_APT_VERSIONS=$( \
+    apt-cache madison "$PACKAGE_NAME" \
+        | awk '{ print $3 }' \
+        | sort -rV
+    )
+
+PACKAGE_APT_VERSION=$( \
+    echo "$MAJOR_PACKAGE_APT_VERSIONS" \
+        | grep "$HOST_DRIVER_VERSION" \
+        | head -n1 \
+    )
+
+if [ -z "$PACKAGE_APT_VERSION" ]; then
+    PACKAGE_APT_VERSION=$(echo "$MAJOR_PACKAGE_APT_VERSIONS" | head -n1)
+
+    {
+        echo "Failed to locate a package with the same driver version"
+        if [ ! -z "$PACKAGE_APT_VERSION" ]; then
+            if [ "$PACKAGE_VERSION" != "$CONTAINER_DRIVER_VERSION" ]; then
+                echo "The latest package will be installed $PACKAGE_NAME=$PACKAGE_APT_VERSION" >&2
+            fi
+        fi
+        echo "X11 apps may fail; mount drivers from your host as a volume"
+        echo "and set LD_LIBRARY_PATH to include the volume"
+        echo "https://github.com/andrewmackrodt/dockerfiles/blob/master/ubuntu-x11/README.md#nvidia-driver-note"
+    } | tee /dev/stderr | sudo -E -u \#${PUID:-1000} notify-send -u critical -i error "$(cat -)"
+
+    if [ -z "$PACKAGE_APT_VERSION" ]; then
+        exit
+    fi
+
+    PACKAGE_VERSION=$(echo "$PACKAGE_APT_VERSION" | sed -nE 's/^([0-9]+(\.[0-9]+)?).*/\1/p')
+
+    if [ "$PACKAGE_VERSION" = "$CONTAINER_DRIVER_VERSION" ]; then
+        exit
+    fi
+fi
+
+PURGE_PACKAGE_NAME=$( \
+    dpkg -l \
+        | awk '$1 == "ii" && $2 ~ "libnvidia-" { print $2 }' \
+        | tr '\n' ' '
+    )
+
+echo "Removing old packages $PURGE_PACKAGE_NAME ..." >&2
+apt-get purge -qqy --auto-remove $PURGE_PACKAGE_NAME >/dev/null
+
+echo "Installing package $PACKAGE_NAME=$PACKAGE_APT_VERSION ..." >&2
+apt-get install -qqy --no-install-recommends "$PACKAGE_NAME=$PACKAGE_APT_VERSION" >/dev/null
+
+rm -rf /var/lib/apt/lists/*
