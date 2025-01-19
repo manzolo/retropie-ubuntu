@@ -24,8 +24,10 @@ RUN apt-get update -qq \
       && apt-get install -qqy --no-install-recommends software-properties-common \
       && (add-apt-repository -y ppa:graphics-drivers/ppa || true) \
       && apt-get purge -qqy --auto-remove software-properties-common \
-      && apt-get install -qqy --no-install-recommends libnvidia-gl-550=550.120-0ubuntu0.22.04.1 \
+      && apt-get install -qqy --no-install-recommends libnvidia-gl-550 \
       && rm -rf /var/lib/apt/lists/*
+
+#      && apt-get install -qqy --no-install-recommends libnvidia-gl-550=550.120-0ubuntu0.22.04.1 \
 
 # add tini
 RUN ARCH="$(dpkg --print-architecture | awk -F- '{ print $NF }')" \
