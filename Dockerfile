@@ -1,6 +1,8 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+
+RUN userdel -r ubuntu
 
 RUN apt-get update -qq \
  && apt-get install -qqy --no-install-recommends \
@@ -19,12 +21,14 @@ RUN apt-get update -qq \
       libdecor-0-plugin-1-cairo \
       vulkan-tools \
       rtkit \
+      kmod \
+      udev \
       pulseaudio \
       git gnupg iproute2 \
       && apt-get install -qqy --no-install-recommends software-properties-common \
       && (add-apt-repository -y ppa:graphics-drivers/ppa || true) \
       && apt-get purge -qqy --auto-remove software-properties-common \
-      && apt-get install -qqy --no-install-recommends libnvidia-gl-550 \
+      && apt-get install -qqy --no-install-recommends libnvidia-gl-550=550.120-0ubuntu0.24.04.1 \
       && rm -rf /var/lib/apt/lists/*
 
 #      && apt-get install -qqy --no-install-recommends libnvidia-gl-550=550.120-0ubuntu0.22.04.1 \
@@ -61,7 +65,7 @@ RUN ARCH="$(dpkg --print-architecture | awk -F- '{ print $NF }')" \
 RUN /bin/echo -e "\
 \n\
 # Allow members of adm to execute the entrypoint\n\
-%adm ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/emulationstation-bootstrap\n\
+%adm ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh\n\
 manzolo ALL=(ALL) NOPASSWD:ALL\n\
 " \
   >/etc/sudoers.d/passwordless

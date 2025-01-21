@@ -1,6 +1,6 @@
 services:
   manzolo-ubuntu:
-    image: manzolo/ubuntu:22.04
+    image: manzolo/ubuntu:24.04
     container_name: manzolo-ubuntu
     runtime: nvidia
     #deploy:
@@ -20,6 +20,7 @@ services:
     shm_size: 512M
     devices:
       - /dev/input
+      - /dev/uinput
       - /dev/snd
       - /dev/nvidia0
       - /dev/nvidiactl

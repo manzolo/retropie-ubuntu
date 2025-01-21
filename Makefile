@@ -1,38 +1,31 @@
-# Nome del file di default per Docker Compose
-DOCKER_COMPOSE_FILE := docker-compose.yml
-CONTAINER_NAME := manzolo-ubuntu
-SERVICE_NAME := manzolo-ubuntu
-IMAGE_NAME := manzolo/ubuntu
+IMAGE_NAME :=manzolo/ubuntu:24.04
+CONTAINER_NAME :=manzolo-ubuntu
+REGISTRY:=docker-hub.lan:5000/
 
 # Target per avviare i container
 start:
 	@echo "Consentire connessioni X11 locali"
 	@xhost +SI:localuser:$(shell id -un)
 	@echo "Riavvio i container Docker Compose"
-	docker compose run --remove-orphans ${SERVICE_NAME} /usr/bin/emulationstation
+	docker compose run --remove-orphans ${CONTAINER_NAME} /bin/bash
 
 # Target per fermare i container
 stop:
 	@echo "Fermo e rimuovo i container Docker Compose"
 	docker compose down
-
-# Target per avviare i container
-restart:
-	@echo "Consentire connessioni X11 locali"
-	@xhost +SI:localuser:$(shell id -un)
-	@echo "Riavvio i container Docker Compose"
-	docker compose down
 	docker compose rm -f
-	docker compose run --remove-orphans ${SERVICE_NAME} /usr/bin/emulationstation 
 
 # Target per la build dell'immagine
 build:
 	@echo "Build dell'immagine"
-	$(eval TAG := $(shell date +'%Y%m%d-%H%M%S'))
-	docker build --progress=plain -t ${IMAGE_NAME}:$(TAG) .
-	@echo "Immagine costruita: ${IMAGE_NAME}:$(TAG)"
-	docker tag ${IMAGE_NAME}:$(TAG) ${IMAGE_NAME}:22.04
-	@echo "Immagine taggata come latest: ${IMAGE_NAME}:22.04"
+	docker build -t ${IMAGE_NAME} .
+	@echo "Immagine costruita: ${IMAGE_NAME}"
+
+registry_tag:
+	docker tag ${IMAGE_NAME} ${REGISTRY}${IMAGE_NAME}
+
+registry_push:
+	docker push ${REGISTRY}${IMAGE_NAME}
 
 # Target per la build dell'immagine
 logs:
@@ -44,4 +37,4 @@ enter:
 	@echo "Consentire connessioni X11 locali"
 	@xhost +SI:localuser:$(shell id -un)
 	@echo "Enter Container"
-	docker compose run --remove-orphans $(SERVICE_NAME) /bin/bash
+	docker compose run --remove-orphans ${CONTAINER_NAME} /bin/bash
