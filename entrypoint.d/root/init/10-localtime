@@ -21,4 +21,4 @@ fi
 
 ln -fns "$zone_file" /etc/localtime
 
-echo "localtime init" >> /home/manzolo/retropie-docker.log
+echo "localtime init" >> /home/manzolo/ubuntu-docker.log

@@ -23,4 +23,4 @@ tee -a /etc/sudoers.d/passwordless >/dev/null<<EOF
 
 EOF
 
-echo "sudo init" >> /home/manzolo/retropie-docker.log
+echo "sudo init" >> /home/manzolo/ubuntu-docker.log

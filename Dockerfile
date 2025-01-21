@@ -66,7 +66,8 @@ RUN /bin/echo -e "\
 \n\
 # Allow members of adm to execute the entrypoint\n\
 %adm ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh\n\
-manzolo ALL=(ALL) NOPASSWD:ALL\n\
+manzolo ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh\n\
+#manzolo ALL=(ALL) NOPASSWD:ALL\n\
 " \
   >/etc/sudoers.d/passwordless
 

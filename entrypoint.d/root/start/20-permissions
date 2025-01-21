@@ -26,4 +26,4 @@ for d in $(echo "$USER_DIRS" | tr ':' $'\n'); do
     chown -R "$ADM_USER:$ADM_USER" "$d"
 done
 
-echo "Permissions start" >> /home/manzolo/retropie-docker.log
+echo "Permissions start" >> /home/manzolo/ubuntu-docker.log

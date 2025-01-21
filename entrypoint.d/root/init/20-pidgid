@@ -114,4 +114,4 @@ if [ "$PUID" != "$ADM_UID" ]; then
     set_uid
 fi
 
-echo "pidgid init" >> /home/manzolo/retropie-docker.log
+echo "pidgid init" >> /home/manzolo/ubuntu-docker.log

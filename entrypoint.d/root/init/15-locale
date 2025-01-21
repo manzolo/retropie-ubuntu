@@ -12,4 +12,4 @@ else
     locale-gen "$LANG" >/dev/null
 fi
 
-echo "locale init" >> /home/manzolo/retropie-docker.log
+echo "locale init" >> /home/manzolo/ubuntu-docker.log
