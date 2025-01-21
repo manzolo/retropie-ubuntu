@@ -1,6 +1,8 @@
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG USERNAME=ubuntu
+ENV USERNAME=${USERNAME}
 
 RUN userdel -r ubuntu
 
@@ -21,8 +23,6 @@ RUN apt-get update -qq \
       libdecor-0-plugin-1-cairo \
       vulkan-tools \
       rtkit \
-      kmod \
-      udev \
       pulseaudio \
       git gnupg iproute2 \
       && apt-get install -qqy --no-install-recommends software-properties-common \
@@ -66,8 +66,8 @@ RUN /bin/echo -e "\
 \n\
 # Allow members of adm to execute the entrypoint\n\
 %adm ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh\n\
-manzolo ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh\n\
-#manzolo ALL=(ALL) NOPASSWD:ALL\n\
+${USERNAME} ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh\n\
+#${USERNAME} ALL=(ALL) NOPASSWD:ALL\n\
 " \
   >/etc/sudoers.d/passwordless
 
@@ -77,15 +77,15 @@ RUN visudo -cf /etc/sudoers.d/passwordless
 #RUN id 1000
 #RUN userdel -r 1000 && groupdel 1000
 
-# Crea il gruppo manzolo
-RUN addgroup --gid 1000 manzolo \
+# Crea il gruppo ${USERNAME}
+RUN addgroup --gid 1000 ${USERNAME} \
     && adduser --gecos "" \
     --shell /bin/bash \
     --uid 1000 \
     --gid 1000 \
     --disabled-password \
-    manzolo \
-    && adduser manzolo sudo
+    ${USERNAME} \
+    && adduser ${USERNAME} sudo
 
 
 # make /var/log writeable by adm group
@@ -93,24 +93,24 @@ RUN chgrp -R adm /var/log \
  && chmod -R g+w /var/log \
  && find /var/log -type d -exec chmod g+s {} \;
 
-# add manzolo user to multimedia
+# add ${USERNAME} user to multimedia
 RUN for group in video audio voice pulse rtkit \
      ; do \
-         adduser manzolo $group ; \
+         adduser ${USERNAME} $group ; \
      done
 
 # copy files to the container
 COPY entrypoint.d /etc/entrypoint.d
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# change to the manzolo user
-USER manzolo
-WORKDIR /home/manzolo
+# change to the ${USERNAME} user
+USER ${USERNAME}
+WORKDIR /home/${USERNAME}
 
 # create common directories, some apps will fail if they don't exist
 RUN mkdir -p \
-  /home/manzolo/.cache \
-  /home/manzolo/.config \
-  /home/manzolo/.local/share
+  /home/${USERNAME}/.cache \
+  /home/${USERNAME}/.config \
+  /home/${USERNAME}/.local/share
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

@@ -18,7 +18,7 @@ stop:
 # Target per la build dell'immagine
 build:
 	@echo "Build dell'immagine"
-	docker build -t ${IMAGE_NAME} .
+	docker build --build-arg USERNAME=manzolo -t ${IMAGE_NAME} .
 	@echo "Immagine costruita: ${IMAGE_NAME}"
 
 registry_tag:
