@@ -1,6 +1,11 @@
-IMAGE_NAME :=manzolo/ubuntu:24.04
-CONTAINER_NAME :=manzolo-ubuntu
-REGISTRY:=docker-hub.lan:5000/
+# Nome del file .env (modificabile se necessario)
+ENV_FILE := .env
+
+# Carica le variabili dal file .env
+ifneq (,$(wildcard $(ENV_FILE)))
+    include $(ENV_FILE)
+    export $(shell sed 's/=.*//' $(ENV_FILE))
+endif
 
 # Target per avviare i container
 start:
@@ -18,14 +23,14 @@ stop:
 # Target per la build dell'immagine
 build:
 	@echo "Build dell'immagine"
-	docker build --build-arg USERNAME=manzolo -t ${IMAGE_NAME} .
-	@echo "Immagine costruita: ${IMAGE_NAME}"
+	docker build --build-arg CONTAINER_USERNAME=${CONTAINER_USERNAME} -t ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG} .
+	@echo "Immagine costruita: ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}"
 
 registry_tag:
-	docker tag ${IMAGE_NAME} ${REGISTRY}${IMAGE_NAME}
+	docker tag ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY_BASE_URL}/${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}
 
 registry_push:
-	docker push ${REGISTRY}${IMAGE_NAME}
+	docker push ${REGISTRY_BASE_URL}/${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}
 
 # Target per la build dell'immagine
 logs:

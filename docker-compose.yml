@@ -1,8 +1,9 @@
 services:
   manzolo-ubuntu:
-    image: manzolo/ubuntu:24.04
-    container_name: manzolo-ubuntu
-    runtime: nvidia
+    image: ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}
+    container_name: ${CONTAINER_NAME}
+    #runtime: nvidia
+
     #deploy:
     #  resources:
     #    reservations:        
@@ -22,32 +23,33 @@ services:
       - /dev/input
       - /dev/uinput
       - /dev/snd
-      - /dev/nvidia0
-      - /dev/nvidiactl
-      - /dev/nvidia-modeset
+      #- /dev/nvidia0
+      #- /dev/nvidiactl
+      #- /dev/nvidia-modeset
     environment:
       # host UID/GID mapping
       - PUID=${UID:-1000}
-      - PGID=${UID:-1000}
+      - PGID=${GID:-1000}
       # Wayland
       - WAYLAND_DISPLAY
-      - XDG_RUNTIME_DIR=/run/user/${UID:-1000}
+      - XDG_RUNTIME_DIR=/run/user/${PUID:-1000}
       - DISPLAY
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - QT_QPA_PLATFORM=xcb
+      - CONTAINER_USERNAME=${CONTAINER_USERNAME}
     volumes:
       # Wayland
-      - /run/user/${UID:-1000}/${WAYLAND_DISPLAY}:/run/user/${UID:-1000}/${WAYLAND_DISPLAY}:rw
-      - /run/user/${UID:-1000}/wayland:/run/user/${UID:-1000}/wayland
-      - /tmp/.X11-unix:/tmp/.X11-unix:ro 
-      #- $HOME/.Xauthority:/manzolo/.Xauthority:rw
+      - /run/user/${PUID:-1000}/${WAYLAND_DISPLAY}:/run/user/${PUID:-1000}/${WAYLAND_DISPLAY}:rw
+      #- /run/user/${PUID:-1000}/wayland:/run/user/${PUID:-1000}/wayland
+      #- /tmp/.X11-unix:/tmp/.X11-unix:ro
+      #- $HOME/.Xauthority:/${CONTAINER_USERNAME}/.Xauthority:rw
       # pulseaudio
       - /etc/machine-id:/etc/machine-id:ro
-      - /run/user/${UID:-1000}/pulse:/run/user/${UID:-1000}/pulse:ro
-      - $HOME/.config/pulse:/home/manzolo/.config/pulse
+      - /run/user/${PUID:-1000}/pulse:/run/user/${PUID:-1000}/pulse:ro
+      - $HOME/.config/pulse:/home/${CONTAINER_USERNAME}/.config/pulse
       # dbus
-      - /run/user/${UID:-1000}/bus:/run/user/${UID:-1000}/bus:ro
+      - /run/user/${PUID:-1000}/bus:/run/user/${PUID:-1000}/bus:ro
       - /run/dbus:/run/dbus:ro
       - /run/udev/data:/run/udev/data:ro
       #- /var/lib/dbus/machine-id:/var/lib/dbus/machine-id:ro

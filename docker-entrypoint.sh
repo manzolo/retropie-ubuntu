@@ -38,7 +38,7 @@ if [ $# -eq 0 \
 fi
 
 
-ADM_USER=${USERNAME}
+ADM_USER=${CONTAINER_USERNAME}
 
 
 ############################################################

@@ -1,8 +1,8 @@
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG USERNAME=ubuntu
-ENV USERNAME=${USERNAME}
+ARG CONTAINER_USERNAME=ubuntu
+ENV CONTAINER_USERNAME=${CONTAINER_USERNAME}
 
 RUN userdel -r ubuntu
 
@@ -66,26 +66,23 @@ RUN /bin/echo -e "\
 \n\
 # Allow members of adm to execute the entrypoint\n\
 %adm ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh\n\
-${USERNAME} ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh\n\
-#${USERNAME} ALL=(ALL) NOPASSWD:ALL\n\
+${CONTAINER_USERNAME} ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh\n\
+#${CONTAINER_USERNAME} ALL=(ALL) NOPASSWD:ALL\n\
 " \
   >/etc/sudoers.d/passwordless
 
 # Assicurati che il file sudoers sia corretto (questo comando verifica la sintassi)
 RUN visudo -cf /etc/sudoers.d/passwordless
 
-#RUN id 1000
-#RUN userdel -r 1000 && groupdel 1000
-
-# Crea il gruppo ${USERNAME}
-RUN addgroup --gid 1000 ${USERNAME} \
+# Crea il gruppo ${CONTAINER_USERNAME}
+RUN addgroup --gid 1000 ${CONTAINER_USERNAME} \
     && adduser --gecos "" \
     --shell /bin/bash \
     --uid 1000 \
     --gid 1000 \
     --disabled-password \
-    ${USERNAME} \
-    && adduser ${USERNAME} sudo
+    ${CONTAINER_USERNAME} \
+    && adduser ${CONTAINER_USERNAME} sudo
 
 
 # make /var/log writeable by adm group
@@ -93,24 +90,24 @@ RUN chgrp -R adm /var/log \
  && chmod -R g+w /var/log \
  && find /var/log -type d -exec chmod g+s {} \;
 
-# add ${USERNAME} user to multimedia
+# add ${CONTAINER_USERNAME} user to multimedia
 RUN for group in video audio voice pulse rtkit \
      ; do \
-         adduser ${USERNAME} $group ; \
+         adduser ${CONTAINER_USERNAME} $group ; \
      done
 
 # copy files to the container
 COPY entrypoint.d /etc/entrypoint.d
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# change to the ${USERNAME} user
-USER ${USERNAME}
-WORKDIR /home/${USERNAME}
+# change to the ${CONTAINER_USERNAME} user
+USER ${CONTAINER_USERNAME}
+WORKDIR /home/${CONTAINER_USERNAME}
 
 # create common directories, some apps will fail if they don't exist
 RUN mkdir -p \
-  /home/${USERNAME}/.cache \
-  /home/${USERNAME}/.config \
-  /home/${USERNAME}/.local/share
+  /home/${CONTAINER_USERNAME}/.cache \
+  /home/${CONTAINER_USERNAME}/.config \
+  /home/${CONTAINER_USERNAME}/.local/share
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

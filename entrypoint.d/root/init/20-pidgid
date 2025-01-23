@@ -3,7 +3,7 @@
 # define variables
 PUID=${PUID:-}
 PGID=${PGID:-}
-ADM_USER=manzolo
+ADM_USER=${CONTAINER_USERNAME}
 
 detect_uid_gid_from_mounts () {
     # get unique non-root "UID GID" pairs
@@ -114,4 +114,4 @@ if [ "$PUID" != "$ADM_UID" ]; then
     set_uid
 fi
 
-echo "pidgid init" >> /home/manzolo/ubuntu-docker.log
+echo "pidgid init" >> /home/${CONTAINER_USERNAME}/ubuntu-docker.log

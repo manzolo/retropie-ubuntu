@@ -1,1 +1,1 @@
-Scripts in this directory will be run as the manzolo user every time the container is started.
+Scripts in this directory will be run as the ${CONTAINER_USERNAME} user every time the container is started.
