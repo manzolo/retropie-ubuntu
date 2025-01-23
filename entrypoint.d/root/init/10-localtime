@@ -21,4 +21,6 @@ fi
 
 ln -fns "$zone_file" /etc/localtime
 
+echo ${TZ:-} | sudo tee /etc/timezone
+
 echo "localtime init" >> /home/${CONTAINER_USERNAME}/ubuntu-docker.log

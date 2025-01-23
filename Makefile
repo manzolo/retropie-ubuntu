@@ -23,7 +23,10 @@ stop:
 # Target per la build dell'immagine
 build:
 	@echo "Build dell'immagine"
-	docker build --build-arg CONTAINER_USERNAME=${CONTAINER_USERNAME} -t ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG} .
+	docker build \
+	--build-arg CONTAINER_USERNAME=${CONTAINER_USERNAME} \
+	-t ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG} .
+
 	@echo "Immagine costruita: ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}"
 
 registry_tag:
@@ -42,4 +45,9 @@ enter:
 	@echo "Consentire connessioni X11 locali"
 	@xhost +SI:localuser:$(shell id -un)
 	@echo "Enter Container"
-	docker compose run --remove-orphans ${CONTAINER_NAME} /bin/bash
+	docker compose run \
+	-e ENTRYPOINT_DEBUG=${ENTRYPOINT_DEBUG} \
+	-e SUDO_NOPASSWD=${SUDO_NOPASSWD} \
+	-e LANG=${LANG} \
+	-e TZ=${TZ} \
+	--remove-orphans ${CONTAINER_NAME} /bin/bash

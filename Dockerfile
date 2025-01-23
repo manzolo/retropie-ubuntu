@@ -11,6 +11,7 @@ RUN apt-get update -qq \
       ca-certificates \
       sudo \
       tzdata \
+      locales \
       wget \
       dbus-x11 \
       gnome-icon-theme \
@@ -82,7 +83,7 @@ RUN addgroup --gid 1000 ${CONTAINER_USERNAME} \
     --gid 1000 \
     --disabled-password \
     ${CONTAINER_USERNAME} \
-    && adduser ${CONTAINER_USERNAME} sudo
+    && adduser ${CONTAINER_USERNAME} adm
 
 
 # make /var/log writeable by adm group
