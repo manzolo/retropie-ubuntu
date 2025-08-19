@@ -1,151 +1,342 @@
-#!/bin/sh
+#!/bin/bash
+set -euo pipefail
 
-echo "Nvidia driver start" >> /home/${CONTAINER_USERNAME}/ubuntu-docker.log
+# Configurazione logging
+LOGFILE="/home/${CONTAINER_USERNAME}/ubuntu-docker.log"
+exec 1> >(tee -a "$LOGFILE")
+exec 2> >(tee -a "$LOGFILE" >&2)
 
-debug() {
-    if [ "${ENTRYPOINT_DEBUG:-0}" != "1" ]; then
-        return
-    fi
-
-    echo "DEBUG: $1" >&2
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] NVIDIA: $*"
 }
 
-IS_NVIDIA_MOUNT=0
+error() {
+    log "ERROR: $*" >&2
+    exit 1
+}
 
-for d in /usr/local/nvidia/lib /usr/local/nvidia/lib64 /nvidia; do
-    if [ -d "$d" ]; then
-        echo "$d" >>/etc/ld.so.conf.d/nvidia.conf
-        IS_NVIDIA_MOUNT=1
+debug() {
+    if [ "${ENTRYPOINT_DEBUG:-0}" = "1" ]; then
+        log "DEBUG: $*"
     fi
-done
+}
 
-if [ $IS_NVIDIA_MOUNT = 1 ]; then
-    debug 'updating ldconfig with mounted nvidia library paths'
-    ldconfig
+warning() {
+    log "WARNING: $*"
+}
 
-    exit
-fi
-
-# abort if user requested skip download
-if [ "${NVIDIA_SKIP_DOWNLOAD:-0}" = "1" ]; then
-    debug 'skipping nvidia driver check NVIDIA_SKIP_DOWNLOAD=1'
-
-    exit
-fi
-
-# abort if nvidia driver not found
-if [ ! -f /proc/driver/nvidia/version ]; then
-    debug 'file not found: /proc/driver/nvidia/version'
-
-    exit
-fi
-
-HOST_DRIVER_VERSION=$(cat /proc/driver/nvidia/version | sed -nE 's/.*Module[ \t]+([0-9]+(\.[0-9]+)?).*/\1/p')
-
-# Se la versione non è trovata, prova un altro metodo (ad esempio dall'output di 'nvidia-smi')
-if [ -z "$HOST_DRIVER_VERSION" ]; then
-    echo "Versione driver non trovata in /proc/driver/nvidia/version. Verifico in altre fonti..."
-    echo "NixOS..."
-    HOST_DRIVER_VERSION=$(cat /proc/driver/nvidia/version | head -n 1 | awk '{print $10}')
-
-    if [ -z "$HOST_DRIVER_VERSION" ]; then
-        echo "Impossibile trovare la versione del driver NVIDIA."
-        exit 1
+notify_user() {
+    local message="$1"
+    local urgency="${2:-normal}"
+    local icon="${3:-info}"
+    
+    if command -v notify-send >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        sudo -u "#${PUID:-1000}" notify-send -u "$urgency" -i "$icon" "NVIDIA Driver" "$message" 2>/dev/null || true
     fi
-fi
+    log "$message"
+}
 
-if [ -z "$HOST_DRIVER_VERSION" ]; then
-    echo "Unable to detect host nvidia driver version" >&2
-    echo "Please contact image maintainer" >&2
-    echo "https://github.com/andrewmackrodt/dockerfiles/issues" >&2
+# Cache delle versioni disponibili
+AVAILABLE_VERSIONS_CACHE="/tmp/nvidia_versions_cache"
+CACHE_EXPIRY_HOURS=6
 
-    exit
-fi
+get_available_nvidia_versions() {
+    local major_version="$1"
+    local package_name="libnvidia-gl-$major_version"
+    local cache_file="${AVAILABLE_VERSIONS_CACHE}_${major_version}"
+    
+    # Controlla se la cache è valida
+    if [ -f "$cache_file" ]; then
+        local cache_age=$(($(date +%s) - $(stat -c %Y "$cache_file")))
+        local cache_expiry=$((CACHE_EXPIRY_HOURS * 3600))
+        
+        if [ $cache_age -lt $cache_expiry ]; then
+            debug "Using cached versions for $package_name"
+            cat "$cache_file"
+            return 0
+        fi
+    fi
+    
+    debug "Fetching available versions for $package_name"
+    
+    # Aggiorna cache pacchetti se necessario
+    if ! apt-cache show "$package_name" >/dev/null 2>&1; then
+        log "Updating package cache to find $package_name"
+        apt-get update -qq >/dev/null 2>&1 || warning "Failed to update package cache"
+    fi
+    
+    # Ottieni versioni disponibili
+    local versions
+    versions=$(apt-cache madison "$package_name" 2>/dev/null | \
+        awk '{print $3}' | \
+        sort -rV | \
+        head -20)  # Limita a 20 versioni più recenti
+    
+    if [ -n "$versions" ]; then
+        echo "$versions" | tee "$cache_file"
+    else
+        warning "No versions found for $package_name"
+        return 1
+    fi
+}
 
-CONTAINER_DRIVER_VERSION=$( \
-    dpkg -l \
-        | awk '$1 == "ii" && $2 ~ "libnvidia-gl-" { print $3 }' \
-        | sed -nE 's/^([0-9]+(\.[0-9]+)?).*/\1/p' \
-        | head -n1 \
+get_version_number() {
+    local full_version="$1"
+    echo "$full_version" | sed -nE 's/^([0-9]+(\.[0-9]+)?).*/\1/p'
+}
+
+find_best_nvidia_version() {
+    local target_version="$1"
+    local major_version="${2:-$(echo "$target_version" | cut -d. -f1)}"
+    
+    debug "Finding best version for target: $target_version, major: $major_version"
+    
+    local available_versions
+    available_versions=$(get_available_nvidia_versions "$major_version" 2>/dev/null)
+    
+    if [ -z "$available_versions" ]; then
+        warning "No available versions found for major version $major_version"
+        return 1
+    fi
+    
+    # 1. Cerca versione esatta
+    local exact_match
+    exact_match=$(echo "$available_versions" | grep "^$target_version" | head -n1)
+    if [ -n "$exact_match" ]; then
+        log "Found exact version match: $exact_match"
+        echo "$exact_match"
+        return 0
+    fi
+    
+    # 2. Cerca versioni con stesso numero base (es. 550.163 -> 550.163.*)
+    local base_version
+    base_version=$(echo "$target_version" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
+    local base_match
+    base_match=$(echo "$available_versions" | grep "^$base_version" | head -n1)
+    if [ -n "$base_match" ]; then
+        log "Found base version match: $base_match (for $base_version)"
+        echo "$base_match"
+        return 0
+    fi
+    
+    # 3. Cerca versione più vicina nella stessa serie major
+    local closest_version
+    closest_version=$(echo "$available_versions" | head -n1)
+    if [ -n "$closest_version" ]; then
+        local closest_number
+        closest_number=$(get_version_number "$closest_version")
+        log "Using closest available version: $closest_version (driver: $closest_number)"
+        echo "$closest_version"
+        return 0
+    fi
+    
+    warning "No suitable version found for $target_version"
+    return 1
+}
+
+detect_host_driver_version() {
+    local host_version=""
+    
+    # Metodi per rilevare la versione del driver
+    local version_sources=(
+        "/proc/driver/nvidia/version"
+        "/sys/module/nvidia/version"
     )
-
-if [ -z "$CONTAINER_DRIVER_VERSION" ]; then
-    echo "Unable to detect container nvidia driver version" >&2
-    echo "Please contact image maintainer" >&2
-    echo "https://github.com/andrewmackrodt/dockerfiles/issues" >&2
-
-    exit
-fi
-
-# abort if drivers match
-if [ "$HOST_DRIVER_VERSION" = "$CONTAINER_DRIVER_VERSION" ]; then
-    debug "nvidia driver match $HOST_DRIVER_VERSION"
-
-    exit
-fi
-
-{
-    echo "nvidia driver mismatch Host($HOST_DRIVER_VERSION) <=> Container($CONTAINER_DRIVER_VERSION)"
-    echo "Automatic driver match will be attempted ..."
-} | tee /dev/stderr | sudo -E -u \#${PUID:-1000} notify-send -u critical -i error "$(cat -)"
-
-HOST_DRIVER_MAJOR_VERSION=$(echo "$HOST_DRIVER_VERSION" | sed -E 's/\..+//')
-
-export DEBIAN_FRONTEND=noninteractive
-
-# update package lists
-apt-get update -qq
-
-PACKAGE_NAME="libnvidia-gl-$HOST_DRIVER_MAJOR_VERSION"
-
-MAJOR_PACKAGE_APT_VERSIONS=$( \
-    apt-cache madison "$PACKAGE_NAME" \
-        | awk '{ print $3 }' \
-        | sort -rV
-    )
-
-PACKAGE_APT_VERSION=$( \
-    echo "$MAJOR_PACKAGE_APT_VERSIONS" \
-        | grep "$HOST_DRIVER_VERSION" \
-        | head -n1 \
-    )
-
-if [ -z "$PACKAGE_APT_VERSION" ]; then
-    PACKAGE_APT_VERSION=$(echo "$MAJOR_PACKAGE_APT_VERSIONS" | head -n1)
-
-    {
-        echo "Failed to locate a package with the same driver version"
-        if [ ! -z "$PACKAGE_APT_VERSION" ]; then
-            if [ "$PACKAGE_VERSION" != "$CONTAINER_DRIVER_VERSION" ]; then
-                echo "The latest package will be installed $PACKAGE_NAME=$PACKAGE_APT_VERSION" >&2
+    
+    for source in "${version_sources[@]}"; do
+        if [ -f "$source" ]; then
+            debug "Checking version source: $source"
+            
+            # Pattern di parsing diversi
+            local patterns=(
+                's/.*Module[ \t]+([0-9]+\.[0-9]+).*/\1/p'
+                's/.*version[ \t]+([0-9]+\.[0-9]+).*/\1/p' 
+                's/.*([0-9]{3}\.[0-9]+).*/\1/p'
+            )
+            
+            for pattern in "${patterns[@]}"; do
+                host_version=$(sed -nE "$pattern" "$source" | head -n1)
+                if [ -n "$host_version" ]; then
+                    debug "Detected version $host_version using pattern $pattern from $source"
+                    break 2
+                fi
+            done
+            
+            # Pattern per NixOS e distribuzioni alternative
+            if [ -z "$host_version" ]; then
+                host_version=$(awk 'NR==1 {for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\.[0-9]+/) {print $i; exit}}' "$source")
+                if [ -n "$host_version" ]; then
+                    debug "Detected version $host_version using alternative pattern from $source"
+                    break
+                fi
             fi
         fi
-        echo "X11 apps may fail; mount drivers from your host as a volume"
-        echo "and set LD_LIBRARY_PATH to include the volume"
-        echo "https://github.com/andrewmackrodt/dockerfiles/blob/master/ubuntu-x11/README.md#nvidia-driver-note"
-    } | tee /dev/stderr | sudo -E -u \#${PUID:-1000} notify-send -u critical -i error "$(cat -)"
-
-    if [ -z "$PACKAGE_APT_VERSION" ]; then
-        exit
+    done
+    
+    # Fallback a nvidia-smi
+    if [ -z "$host_version" ] && command -v nvidia-smi >/dev/null 2>&1; then
+        debug "Trying nvidia-smi as fallback"
+        host_version=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -d ' ')
+        if [ -n "$host_version" ]; then
+            debug "Detected version $host_version from nvidia-smi"
+        fi
     fi
-
-    PACKAGE_VERSION=$(echo "$PACKAGE_APT_VERSION" | sed -nE 's/^([0-9]+(\.[0-9]+)?).*/\1/p')
-
-    if [ "$PACKAGE_VERSION" = "$CONTAINER_DRIVER_VERSION" ]; then
-        exit
+    
+    # Fallback a nvidia-settings
+    if [ -z "$host_version" ] && command -v nvidia-settings >/dev/null 2>&1; then
+        debug "Trying nvidia-settings as fallback"
+        host_version=$(nvidia-settings -q NvidiaDriverVersion 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -n1)
+        if [ -n "$host_version" ]; then
+            debug "Detected version $host_version from nvidia-settings"
+        fi
     fi
-fi
+    
+    echo "$host_version"
+}
 
-PURGE_PACKAGE_NAME=$( \
-    dpkg -l \
-        | awk '$1 == "ii" && $2 ~ "libnvidia-" { print $2 }' \
-        | tr '\n' ' '
+install_nvidia_driver() {
+    local target_version="$1"
+    local major_version="$2"
+    local package_name="libnvidia-gl-$major_version"
+    
+    log "Installing NVIDIA driver: $package_name=$target_version"
+    
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # Rimuovi pacchetti NVIDIA esistenti
+    local existing_packages
+    existing_packages=$(dpkg -l 2>/dev/null | \
+        awk '$1 == "ii" && $2 ~ /^libnvidia-/ {print $2}' | \
+        tr '\n' ' ')
+    
+    if [ -n "$existing_packages" ]; then
+        log "Removing existing NVIDIA packages: $existing_packages"
+        if ! apt-get purge -qqy --auto-remove $existing_packages >/dev/null 2>&1; then
+            warning "Failed to remove some existing NVIDIA packages, continuing..."
+        fi
+    fi
+    
+    # Installa il nuovo pacchetto
+    local install_attempts=(
+        "$package_name=$target_version"
+        "$package_name"  # Fallback alla versione più recente
     )
+    
+    for attempt in "${install_attempts[@]}"; do
+        log "Attempting to install: $attempt"
+        if apt-get install -qqy --no-install-recommends "$attempt" >/dev/null 2>&1; then
+            log "Successfully installed: $attempt"
+            
+            # Verifica l'installazione
+            local installed_version
+            installed_version=$(dpkg -l | \
+                awk -v pkg="$package_name" '$1 == "ii" && $2 == pkg {print $3}' | \
+                head -n1)
+            
+            if [ -n "$installed_version" ]; then
+                log "Verified installation: $package_name=$installed_version"
+                return 0
+            fi
+        else
+            warning "Failed to install: $attempt"
+        fi
+    done
+    
+    error "Failed to install any version of $package_name"
+}
 
-echo "Removing old packages $PURGE_PACKAGE_NAME ..." >&2
-apt-get purge -qqy --auto-remove $PURGE_PACKAGE_NAME >/dev/null
+main() {
+    log "Starting NVIDIA driver alignment"
+    
+    # Controlla mount esterni
+    local nvidia_mount_found=false
+    for mount_path in "/usr/local/nvidia/lib" "/usr/local/nvidia/lib64" "/nvidia"; do
+        if [ -d "$mount_path" ]; then
+            log "Found external NVIDIA mount: $mount_path"
+            echo "$mount_path" >> /etc/ld.so.conf.d/nvidia.conf
+            nvidia_mount_found=true
+        fi
+    done
+    
+    if [ "$nvidia_mount_found" = true ]; then
+        log "Using externally mounted NVIDIA libraries"
+        ldconfig
+        log "NVIDIA setup completed using mounted libraries"
+        return 0
+    fi
+    
+    # Controlla skip flag
+    if [ "${NVIDIA_SKIP_DOWNLOAD:-0}" = "1" ]; then
+        debug "Skipping NVIDIA driver check (NVIDIA_SKIP_DOWNLOAD=1)"
+        return 0
+    fi
+    
+    # Rileva versione host
+    local host_version
+    host_version=$(detect_host_driver_version)
+    
+    if [ -z "$host_version" ]; then
+        log "No NVIDIA driver detected on host system"
+        return 0
+    fi
+    
+    log "Host NVIDIA driver version: $host_version"
+    
+    # Rileva versione container
+    local container_version
+    container_version=$(dpkg -l 2>/dev/null | \
+        awk '$1 == "ii" && $2 ~ /^libnvidia-gl-/ {print $3}' | \
+        sed -nE 's/^([0-9]+(\.[0-9]+)?).*/\1/p' | \
+        head -n1)
+    
+    if [ -n "$container_version" ]; then
+        log "Container NVIDIA driver version: $container_version"
+        
+        # Controlla se le versioni corrispondono
+        if [ "$host_version" = "$container_version" ]; then
+            log "NVIDIA driver versions match - no action needed"
+            return 0
+        fi
+    else
+        log "No NVIDIA driver found in container"
+    fi
+    
+    # Determina versione major
+    local major_version
+    major_version=$(echo "$host_version" | cut -d. -f1)
+    
+    notify_user "Aligning NVIDIA driver to version $host_version" "normal" "dialog-information"
+    
+    # Trova la migliore versione disponibile
+    local best_version
+    if best_version=$(find_best_nvidia_version "$host_version" "$major_version"); then
+        install_nvidia_driver "$best_version" "$major_version"
+        
+        # Cleanup finale
+        apt-get autoremove -qqy >/dev/null 2>&1 || true
+        rm -rf /var/lib/apt/lists/*
+        
+        notify_user "NVIDIA driver successfully updated to $best_version" "normal" "dialog-information"
+        log "NVIDIA driver alignment completed successfully"
+    else
+        notify_user "Could not find compatible NVIDIA driver version" "critical" "error"
+        warning "NVIDIA driver alignment failed - applications may not work correctly"
+        
+        # Tenta di installare una versione generica come ultima risorsa
+        log "Attempting to install generic NVIDIA driver as fallback"
+        if apt-get install -qqy --no-install-recommends "libnvidia-gl-$major_version" >/dev/null 2>&1; then
+            log "Installed generic NVIDIA driver version"
+            notify_user "Installed generic NVIDIA driver - some features may not work optimally" "normal" "dialog-warning"
+        fi
+    fi
+}
 
-echo "Installing package $PACKAGE_NAME=$PACKAGE_APT_VERSION ..." >&2
-apt-get install -qqy --no-install-recommends "$PACKAGE_NAME=$PACKAGE_APT_VERSION" >/dev/null
+# Cleanup su exit
+cleanup() {
+    rm -f "${AVAILABLE_VERSIONS_CACHE}_"* 2>/dev/null || true
+}
 
-rm -rf /var/lib/apt/lists/*
+trap cleanup EXIT
+
+# Esegui main
+main "$@"

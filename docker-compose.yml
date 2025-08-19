@@ -2,56 +2,134 @@ services:
   manzolo-ubuntu:
     image: ${REGISTRY_BASE_URL}/${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}
     container_name: ${CONTAINER_NAME}
-    #runtime: nvidia
-
-    #deploy:
-    #  resources:
-    #    reservations:        
-    #      devices:
-    #        - driver: nvidia
-    #          count: 1
-    #          capabilities: [gpu]
-                
-                
-    stdin_open: true        # Permette l'interazione con la shell
-    tty: true               # Mantiene la sessione aperta
+    
+    # Configurazione GPU ottimizzata
+    runtime: nvidia  # Decommentare per runtime NVIDIA
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility, video, graphics, display]
+    
+    # Configurazione base container
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    
+    # Network e sicurezza
     network_mode: host
     security_opt:
       - apparmor:unconfined
-    shm_size: 512M
+      - seccomp:unconfined  # Necessario per alcune applicazioni GUI
+    
+    # Risorse
+    shm_size: 1g  # Aumentato per applicazioni che richiedono memoria condivisa
+    ulimits:
+      memlock: -1  # Necessario per CUDA
+      stack: 67108864
+    
+    # Dispositivi
     devices:
-      - /dev/input
-      - /dev/uinput
-      - /dev/snd
-      #- /dev/nvidia0
-      #- /dev/nvidiactl
-      #- /dev/nvidia-modeset
+      - /dev/input:/dev/input
+      - /dev/uinput:/dev/uinput
+      - /dev/snd:/dev/snd
+      # NVIDIA devices - decommentare se necessario
+      #- /dev/nvidia0:/dev/nvidia0
+      #- /dev/nvidiactl:/dev/nvidiactl
+      #- /dev/nvidia-modeset:/dev/nvidia-modeset
+      #- /dev/nvidia-uvm:/dev/nvidia-uvm
+      #- /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
+    
     environment:
-      # host UID/GID mapping
+      # Mapping UID/GID host
       - PUID=${UID:-1000}
       - PGID=${GID:-1000}
-      # Wayland
-      - WAYLAND_DISPLAY
-      - XDG_RUNTIME_DIR=/run/user/${PUID:-1000}
-      - DISPLAY
+      
+      # Display configuration
+      - DISPLAY=${DISPLAY}
+      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY}
+      - XDG_RUNTIME_DIR=/run/user/${UID:-1000}
+      - XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-wayland}
+      
+      # NVIDIA configuration
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-      - QT_QPA_PLATFORM=xcb
-      - CONTAINER_USERNAME=${CONTAINER_USERNAME}
+      - __GLX_VENDOR_LIBRARY_NAME=nvidia
+      - __GL_SYNC_TO_VBLANK=1
+      
+      # Qt/GTK configuration
+      - QT_QPA_PLATFORM=wayland
+      - QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+      - GDK_BACKEND=wayland,x11
+      - MOZ_ENABLE_WAYLAND=1
+      
+      # Container configuration
+      - CONTAINER_USERNAME=${CONTAINER_USERNAME:-ubuntu}
+      - ENTRYPOINT_DEBUG=${DEBUG:-0}
+      - S6_ENABLE=${S6_ENABLE:-0}
+      
+      # Audio configuration
+      - PULSE_RUNTIME_PATH=/run/user/${UID:-1000}/pulse
+      - PULSE_COOKIE_PATH=/home/${CONTAINER_USERNAME:-ubuntu}/.config/pulse/cookie
+      
+      # Locale
+      - LANG=en_US.UTF-8
+      - LC_ALL=en_US.UTF-8
+    
     volumes:
-      # Wayland
-      - /run/user/${PUID:-1000}/${WAYLAND_DISPLAY}:/run/user/${PUID:-1000}/${WAYLAND_DISPLAY}:rw
-      #- /run/user/${PUID:-1000}/wayland:/run/user/${PUID:-1000}/wayland
-      #- /tmp/.X11-unix:/tmp/.X11-unix:ro
-      #- $HOME/.Xauthority:/${CONTAINER_USERNAME}/.Xauthority:rw
-      # pulseaudio
+      # Display sockets
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - /run/user/${UID:-1000}/${WAYLAND_DISPLAY:-wayland-0}:/run/user/${UID:-1000}/${WAYLAND_DISPLAY:-wayland-0}:rw
+      - ${HOME}/.Xauthority:/home/${CONTAINER_USERNAME:-ubuntu}/.Xauthority:ro
+      
+      # Audio
       - /etc/machine-id:/etc/machine-id:ro
-      - /run/user/${PUID:-1000}/pulse:/run/user/${PUID:-1000}/pulse:ro
-      - $HOME/.config/pulse:/home/${CONTAINER_USERNAME}/.config/pulse
-      # dbus
-      - /run/user/${PUID:-1000}/bus:/run/user/${PUID:-1000}/bus:ro
+      - /run/user/${UID:-1000}/pulse:/run/user/${UID:-1000}/pulse:rw
+      - ${HOME}/.config/pulse:/home/${CONTAINER_USERNAME:-ubuntu}/.config/pulse:rw
+      - /etc/pulse:/etc/pulse:ro
+      
+      # D-Bus
+      - /run/user/${UID:-1000}/bus:/run/user/${UID:-1000}/bus:rw
       - /run/dbus:/run/dbus:ro
+      - /var/lib/dbus/machine-id:/var/lib/dbus/machine-id:ro
+      
+      # Hardware detection
       - /run/udev/data:/run/udev/data:ro
-      #- /var/lib/dbus/machine-id:/var/lib/dbus/machine-id:ro
-      # inputs
-      - /dev/input:/dev/input
+      - /sys/class:/sys/class:ro
+      - /sys/devices:/sys/devices:ro
+      
+      # Input devices
+      - /dev/input:/dev/input:rw
+      
+      # Application data persistence (optional)
+      - ${HOME}/.local/share:/home/${CONTAINER_USERNAME:-ubuntu}/.local/share:rw
+      - ${HOME}/.cache:/home/${CONTAINER_USERNAME:-ubuntu}/.cache:rw
+      - ${HOME}/.config:/home/${CONTAINER_USERNAME:-ubuntu}/.config:rw
+      
+      # Shared directories (uncomment as needed)
+      #- ${HOME}/Documents:/home/${CONTAINER_USERNAME:-ubuntu}/Documents:rw
+      #- ${HOME}/Downloads:/home/${CONTAINER_USERNAME:-ubuntu}/Downloads:rw
+      #- ${HOME}/Desktop:/home/${CONTAINER_USERNAME:-ubuntu}/Desktop:rw
+      
+      # GPU vendor specific libraries (optional)
+      #- /usr/lib/x86_64-linux-gnu/dri:/usr/lib/x86_64-linux-gnu/dri:ro
+      #- /usr/share/vulkan:/usr/share/vulkan:ro
+      
+      # Container logs
+      - ./logs:/home/${CONTAINER_USERNAME:-ubuntu}/logs:rw
+    
+    # Configurazione healthcheck
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "docker-entrypoint.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Labels per metadata
+    labels:
+      - "it.manzolo.description=Ubuntu GUI container with NVIDIA support"
+      - "it.manzolo.version=1.0"
+      - "it.manzolo.maintainer=manzolo@libero.it"

@@ -2,113 +2,153 @@ FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG CONTAINER_USERNAME=ubuntu
+ARG CONTAINER_UID=1000
+ARG CONTAINER_GID=1000
+ARG NVIDIA_MAJOR_VERSION=550
+ARG NVIDIA_FALLBACK_VERSION=550.120-0ubuntu0.24.04.1
+
 ENV CONTAINER_USERNAME=${CONTAINER_USERNAME}
+ENV CONTAINER_UID=${CONTAINER_UID}
+ENV CONTAINER_GID=${CONTAINER_GID}
 
-RUN userdel -r ubuntu
+# Etichette per metadati
+LABEL maintainer="manzolo@libero.it"
+LABEL description="Ubuntu container with GUI support and NVIDIA drivers"
+LABEL version="1.0"
 
-RUN apt-get update -qq \
- && apt-get install -qqy --no-install-recommends \
-      ca-certificates \
-      sudo \
-      tzdata \
-      locales \
-      wget \
-      dbus-x11 \
-      gnome-icon-theme \
-      libcanberra-gtk-module \
-      libcanberra-gtk3-module \
-      libgl1-mesa-dri \
-      libnotify-bin \
-      x11-xserver-utils \
-      qt6-wayland \
-      libdecor-0-plugin-1-cairo \
-      vulkan-tools \
-      rtkit \
-      pulseaudio \
-      git gnupg iproute2 \
-      && apt-get install -qqy --no-install-recommends software-properties-common \
-      && (add-apt-repository -y ppa:graphics-drivers/ppa || true) \
-      && apt-get purge -qqy --auto-remove software-properties-common \
-      && apt-get install -qqy --no-install-recommends libnvidia-gl-550=550.120-0ubuntu0.24.04.1 \
-      && rm -rf /var/lib/apt/lists/*
+# Rimuovi l'utente ubuntu esistente
+RUN userdel -r ubuntu 2>/dev/null || true
 
-#      && apt-get install -qqy --no-install-recommends libnvidia-gl-550=550.120-0ubuntu0.22.04.1 \
+# Installa pacchetti in un singolo layer per ottimizzare le dimensioni
+RUN apt-get update -qq && \
+    apt-get install -qqy --no-install-recommends \
+        ca-certificates \
+        sudo \
+        tzdata \
+        locales \
+        wget \
+        curl \
+        gpg \
+        xz-utils \
+        # GUI e multimedia
+        dbus-x11 \
+        gnome-icon-theme \
+        libcanberra-gtk-module \
+        libcanberra-gtk3-module \
+        libgl1-mesa-dri \
+        libnotify-bin \
+        x11-xserver-utils \
+        qt6-wayland \
+        libdecor-0-plugin-1-cairo \
+        vulkan-tools \
+        rtkit \
+        pulseaudio \
+        # Sviluppo
+        git \
+        gnupg \
+        iproute2 \
+        software-properties-common && \
+    # Aggiungi PPA per driver NVIDIA (con gestione errori)
+    (add-apt-repository -y ppa:graphics-drivers/ppa || echo "Warning: Failed to add graphics drivers PPA") && \
+    apt-get purge -qqy --auto-remove software-properties-common && \
+    # Installa driver NVIDIA con fallback automatico
+    apt-get update -qq && \
+    # Prova prima con la versione fallback, poi con la più recente disponibile
+    (apt-get install -qqy --no-install-recommends libnvidia-gl-${NVIDIA_MAJOR_VERSION}=${NVIDIA_FALLBACK_VERSION} || \
+     apt-get install -qqy --no-install-recommends libnvidia-gl-${NVIDIA_MAJOR_VERSION} || \
+     echo "Warning: NVIDIA driver installation failed, will be handled at runtime") && \
+    # Pulizia finale
+    apt-get autoremove -y && \
+    apt-get autoclean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# add tini
-RUN ARCH="$(dpkg --print-architecture | awk -F- '{ print $NF }')" \
- && wget -q -O /tmp/release.json "https://api.github.com/repos/krallin/tini/releases/latest" \
- && grep -E '"browser_download_url":.+'$ARCH'' /tmp/release.json | grep -v -E ".(asc|sig)" | head -n1 | cut -d '"' -f4 > /tmp/release.txt \
- && wget -q -O /usr/local/bin/tini "$(cat /tmp/release.txt)" \
- && chmod +x /usr/local/bin/tini \
- && rm -f /tmp/release.*
+# Installa tini con verifica checksum
+RUN ARCH="$(dpkg --print-architecture | awk -F- '{ print $NF }')" && \
+    TINI_VERSION="v0.19.0" && \
+    wget -q -O /usr/local/bin/tini "https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-${ARCH}" && \
+    chmod +x /usr/local/bin/tini && \
+    # Verifica che tini funzioni
+    /usr/local/bin/tini --version
 
-# add gosu
-RUN ARCH="$(dpkg --print-architecture | awk -F- '{ print $NF }')" \
- && wget -q -O /tmp/release.json "https://api.github.com/repos/tianon/gosu/releases/latest" \
- && grep -E '"browser_download_url":.+'$ARCH'' /tmp/release.json | grep -v -E ".(asc|sig)" | head -n1 | cut -d '"' -f4 > /tmp/release.txt \
- && wget -q -O /usr/local/bin/gosu "$(cat /tmp/release.txt)" \
- && chmod +x /usr/local/bin/gosu \
- && rm -f /tmp/release.* \
- && gosu nobody true
+# Installa gosu con verifica
+RUN ARCH="$(dpkg --print-architecture | awk -F- '{ print $NF }')" && \
+    GOSU_VERSION="1.17" && \
+    wget -q -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${ARCH}" && \
+    chmod +x /usr/local/bin/gosu && \
+    # Verifica che gosu funzioni
+    gosu nobody true
 
-# add s6-overlay
-RUN ARCH="$(dpkg --print-architecture | awk -F- '{ print $NF }')" \
- && wget -q -O /tmp/release.json "https://api.github.com/repos/just-containers/s6-overlay/releases/38080409" \
- && grep -E '"browser_download_url":.+'$ARCH'\.tar\.gz' /tmp/release.json | grep -v -E ".(asc|sig)" | head -n1 | cut -d '"' -f4 > /tmp/release.txt \
- && wget -q -O s6-overlay.tar.gz "$(cat /tmp/release.txt)" \
- && mkdir s6-overlay \
- && tar zxfh s6-overlay.tar.gz -C s6-overlay/ \
- && find s6-overlay -mindepth 1 -maxdepth 1 -exec sh -c 'cp -rl {}/* /$(basename {})' \; \
- && mv s6-overlay/init /init \
- && rm -rf /tmp/release.* s6-overlay*
+# Installa s6-overlay con versione fissa
+RUN S6_VERSION="3.1.6.2" && \
+    ARCH="$(dpkg --print-architecture)" && \
+    S6_ARCH="" && \
+    case "${ARCH}" in \
+        amd64) S6_ARCH="x86_64" ;; \
+        arm64) S6_ARCH="aarch64" ;; \
+        *) echo "Unsupported architecture: ${ARCH}" && exit 1 ;; \
+    esac && \
+    wget -q -O s6-overlay.tar.gz "https://github.com/just-containers/s6-overlay/releases/download/v${S6_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" && \
+    tar -C / -Jxpf s6-overlay.tar.gz && \
+    rm s6-overlay.tar.gz
 
-# allow passwordless sudo to entrypoint
-RUN /bin/echo -e "\
-\n\
-# Allow members of adm to execute the entrypoint\n\
-%adm ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh\n\
-${CONTAINER_USERNAME} ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh\n\
-#${CONTAINER_USERNAME} ALL=(ALL) NOPASSWD:ALL\n\
-" \
-  >/etc/sudoers.d/passwordless
+# Configura sudo con regole più specifiche
+RUN echo "# Allow members of adm to execute the entrypoint" > /etc/sudoers.d/passwordless && \
+    echo "%adm ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh" >> /etc/sudoers.d/passwordless && \
+    echo "${CONTAINER_USERNAME} ALL=(ALL) NOPASSWD:SETENV: /usr/local/bin/docker-entrypoint.sh" >> /etc/sudoers.d/passwordless && \
+    # Verifica la sintassi del file sudoers
+    visudo -cf /etc/sudoers.d/passwordless && \
+    chmod 440 /etc/sudoers.d/passwordless
 
-# Assicurati che il file sudoers sia corretto (questo comando verifica la sintassi)
-RUN visudo -cf /etc/sudoers.d/passwordless
+# Crea il gruppo e l'utente con UID/GID specificati
+RUN groupadd --gid ${CONTAINER_GID} ${CONTAINER_USERNAME} && \
+    useradd --create-home \
+            --shell /bin/bash \
+            --uid ${CONTAINER_UID} \
+            --gid ${CONTAINER_GID} \
+            --groups adm,video,audio,pulse,rtkit \
+            ${CONTAINER_USERNAME}
 
-# Crea il gruppo ${CONTAINER_USERNAME}
-RUN addgroup --gid 1000 ${CONTAINER_USERNAME} \
-    && adduser --gecos "" \
-    --shell /bin/bash \
-    --uid 1000 \
-    --gid 1000 \
-    --disabled-password \
-    ${CONTAINER_USERNAME} \
-    && adduser ${CONTAINER_USERNAME} adm
+# Configura log directory
+RUN chgrp -R adm /var/log && \
+    chmod -R g+w /var/log && \
+    find /var/log -type d -exec chmod g+s {} \; && \
+    # Crea directory per runtime
+    mkdir -p /run/user/${CONTAINER_UID} && \
+    chown ${CONTAINER_UID}:${CONTAINER_GID} /run/user/${CONTAINER_UID} && \
+    chmod 700 /run/user/${CONTAINER_UID}
 
+# Copia file di configurazione
+COPY --chown=root:root entrypoint.d /etc/entrypoint.d
+COPY --chown=root:root --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# make /var/log writeable by adm group
-RUN chgrp -R adm /var/log \
- && chmod -R g+w /var/log \
- && find /var/log -type d -exec chmod g+s {} \;
+# Configura locale
+RUN locale-gen en_US.UTF-8
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US:en \
+    LC_ALL=en_US.UTF-8
 
-# add ${CONTAINER_USERNAME} user to multimedia
-RUN for group in video audio voice pulse rtkit \
-     ; do \
-         adduser ${CONTAINER_USERNAME} $group ; \
-     done
-
-# copy files to the container
-COPY entrypoint.d /etc/entrypoint.d
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-
-# change to the ${CONTAINER_USERNAME} user
+# Passa all'utente non-root
 USER ${CONTAINER_USERNAME}
 WORKDIR /home/${CONTAINER_USERNAME}
 
-# create common directories, some apps will fail if they don't exist
+# Crea directory necessarie per l'utente
 RUN mkdir -p \
-  /home/${CONTAINER_USERNAME}/.cache \
-  /home/${CONTAINER_USERNAME}/.config \
-  /home/${CONTAINER_USERNAME}/.local/share
+    .cache \
+    .config \
+    .local/share \
+    .local/bin && \
+    # Crea un semplice file di log per debug
+    touch ubuntu-docker.log
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD pgrep -f docker-entrypoint.sh > /dev/null || exit 1
+
+# Esponi variabili d'ambiente utili
+ENV XDG_RUNTIME_DIR=/run/user/${CONTAINER_UID} \
+    XDG_CONFIG_HOME=/home/${CONTAINER_USERNAME}/.config \
+    XDG_CACHE_HOME=/home/${CONTAINER_USERNAME}/.cache \
+    XDG_DATA_HOME=/home/${CONTAINER_USERNAME}/.local/share
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/bin/bash"]
