@@ -1,6 +1,6 @@
 services:
   manzolo-ubuntu:
-    image: ${REGISTRY_BASE_URL}/${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}
+    image: ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}
     container_name: ${CONTAINER_NAME}
     
     # Configurazione GPU ottimizzata

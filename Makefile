@@ -21,19 +21,21 @@ stop:
 	docker compose rm -f
 
 # Target per la build dell'immagine
+#	-t ${REGISTRY_BASE_URL}/${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG} .
 build:
 	@echo "Build dell'immagine"
 	docker build \
 	--build-arg CONTAINER_USERNAME=${CONTAINER_USERNAME} \
-	-t ${REGISTRY_BASE_URL}/${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG} .
+	-t ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG} .
 
 	@echo "Immagine costruita: ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}"
 
 #registry_tag:
 #	docker tag ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY_BASE_URL}/${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}
 
+#	docker push ${REGISTRY_BASE_URL}/${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}
 registry_push:
-	docker push ${REGISTRY_BASE_URL}/${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}
+	docker push ${IMAGE_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}
 
 # Target per la build dell'immagine
 logs:
