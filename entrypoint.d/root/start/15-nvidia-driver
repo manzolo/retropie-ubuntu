@@ -21,7 +21,7 @@ error() {
 }
 
 debug() {
-    if [ "${ENTRYPOINT_DEBUG:-1}" = "1" ]; then
+    if [ "${ENTRYPOINT_DEBUG:-0}" = "1" ]; then
         log "DEBUG: $*"
     fi
 }
@@ -73,7 +73,7 @@ get_available_nvidia_versions() {
     local package_name="libnvidia-gl-$major_version"
     local cache_file="${AVAILABLE_VERSIONS_CACHE}_${major_version}"
     
-    # Controlla se la cache è valida
+    debug "Checking cache for $package_name"
     if [ -f "$cache_file" ] && [ -s "$cache_file" ]; then
         local cache_age=$(($(date +%s) - $(stat -c %Y "$cache_file")))
         local cache_expiry=$((CACHE_EXPIRY_HOURS * 3600))
@@ -87,7 +87,6 @@ get_available_nvidia_versions() {
     
     debug "Fetching available versions for $package_name"
     
-    # Aggiorna cache pacchetti con retry
     local retry=1
     while [ $retry -le "$MAX_RETRIES" ]; do
         if apt-get update -y >/dev/null 2>>"$LOGFILE"; then
@@ -102,7 +101,6 @@ get_available_nvidia_versions() {
         warning "Failed to update package cache after $MAX_RETRIES attempts"
     fi
     
-    # Ottieni versioni disponibili
     local versions
     versions=$(apt-cache madison "$package_name" 2>>"$LOGFILE" | \
         awk '{print $3}' | \
@@ -137,7 +135,6 @@ find_best_nvidia_version() {
         return 1
     fi
     
-    # 1. Cerca versione esatta
     local exact_match
     exact_match=$(echo "$available_versions" | grep "^$target_version" | head -n1)
     if [ -n "$exact_match" ]; then
@@ -146,7 +143,6 @@ find_best_nvidia_version() {
         return 0
     fi
     
-    # 2. Cerca versioni con stesso numero base (es. 550.163 -> 550.163.*)
     local base_version
     base_version=$(echo "$target_version" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
     local base_match
@@ -157,7 +153,6 @@ find_best_nvidia_version() {
         return 0
     fi
     
-    # 3. Cerca versione più vicina nella stessa serie major
     local closest_version
     closest_version=$(echo "$available_versions" | head -n1)
     if [ -n "$closest_version" ]; then
@@ -175,7 +170,6 @@ find_best_nvidia_version() {
 detect_host_driver_version() {
     local host_version=""
     
-    # Metodi per rilevare la versione del driver
     local version_sources=(
         "/proc/driver/nvidia/version"
         "/sys/module/nvidia/version"
@@ -185,7 +179,6 @@ detect_host_driver_version() {
         if [ -f "$source" ]; then
             debug "Checking version source: $source"
             
-            # Pattern di parsing diversi
             local patterns=(
                 's/.*Module[ \t]+([0-9]+\.[0-9]+).*/\1/p'
                 's/.*version[ \t]+([0-9]+\.[0-9]+).*/\1/p' 
@@ -200,7 +193,6 @@ detect_host_driver_version() {
                 fi
             done
             
-            # Pattern per NixOS e distribuzioni alternative
             if [ -z "$host_version" ]; then
                 host_version=$(awk 'NR==1 {for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\.[0-9]+/) {print $i; exit}}' "$source")
                 if [ -n "$host_version" ]; then
@@ -211,7 +203,6 @@ detect_host_driver_version() {
         fi
     done
     
-    # Fallback a nvidia-smi
     if [ -z "$host_version" ] && command -v nvidia-smi >/dev/null 2>&1; then
         debug "Trying nvidia-smi as fallback"
         host_version=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -d ' ')
@@ -220,7 +211,6 @@ detect_host_driver_version() {
         fi
     fi
     
-    # Fallback a nvidia-settings
     if [ -z "$host_version" ] && command -v nvidia-settings >/dev/null 2>&1; then
         debug "Trying nvidia-settings as fallback"
         host_version=$(nvidia-settings -q NvidiaDriverVersion 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -n1)
@@ -230,6 +220,24 @@ detect_host_driver_version() {
     fi
     
     echo "$host_version"
+}
+
+unload_nvidia_modules() {
+    log "Attempting to unload NVIDIA kernel modules"
+    local nvidia_modules=("nvidia" "nvidia_drm" "nvidia_modeset" "nvidia_uvm")
+    for module in "${nvidia_modules[@]}"; do
+        if lsmod | grep -q "^${module}\b"; then
+            log "Unloading module $module"
+            if ! rmmod "$module" 2>>"$LOGFILE"; then
+                warning "Failed to unload module $module"
+                log "Error details: $(cat "$LOGFILE" | tail -n 10)"
+            else
+                log "Successfully unloaded module $module"
+            fi
+        else
+            log "Module $module not loaded"
+        fi
+    done
 }
 
 remove_existing_packages() {
@@ -245,9 +253,83 @@ remove_existing_packages() {
     
     log "Removing existing NVIDIA packages: $existing_packages"
     
+    # Verifica file NVIDIA bloccati
+    local nvidia_files=("/usr/share/nvidia/nvoptix.bin" "/usr/lib/nvidia/current/nvoptix.bin")
+    for file in "${nvidia_files[@]}"; do
+        if [ -f "$file" ]; then
+            log "Checking processes using $file"
+            local pids=""
+            if command -v fuser >/dev/null 2>&1; then
+                log "Using fuser to check $file"
+                pids=$(fuser "$file" 2>>"$LOGFILE" || true)
+            elif command -v lsof >/dev/null 2>&1; then
+                log "Using lsof to check $file"
+                pids=$(lsof "$file" 2>>"$LOGFILE" | awk 'NR>1 {print $2}' | sort -u || true)
+            else
+                warning "Neither fuser nor lsof found, skipping process check for $file"
+            fi
+            if [ -n "$pids" ]; then
+                log "Found processes using $file: $pids"
+                for pid in $pids; do
+                    if [ "$pid" != "$$" ] && [ "$pid" != "1" ]; then
+                        log "Attempting to terminate process $pid"
+                        if kill -TERM "$pid" 2>>"$LOGFILE"; then
+                            sleep 1
+                            if kill -0 "$pid" 2>/dev/null; then
+                                log "Process $pid still running, forcing termination"
+                                kill -9 "$pid" 2>>"$LOGFILE" || true
+                            fi
+                        else
+                            warning "Failed to terminate process $pid"
+                        fi
+                    else
+                        warning "Skipping termination of critical PID $pid"
+                    fi
+                done
+                sleep 2
+            else
+                log "No processes found using $file"
+            fi
+        fi
+    done
+    
+    # Verifica e termina processi NVIDIA residui in modo selettivo
+    if command -v pgrep >/dev/null 2>&1; then
+        log "Checking for residual NVIDIA processes"
+        local nvidia_processes=("nvidia-persistenced" "nvidia-settings" "nvidia-smi")
+        local pids=""
+        for proc in "${nvidia_processes[@]}"; do
+            pids=$(pgrep -f "$proc" 2>>"$LOGFILE" || true)
+            if [ -n "$pids" ]; then
+                log "Found NVIDIA processes ($proc): $pids"
+                for pid in $pids; do
+                    if [ "$pid" != "$$" ] && [ "$pid" != "1" ]; then
+                        log "Attempting to terminate $proc (PID $pid)"
+                        if kill -TERM "$pid" 2>>"$LOGFILE"; then
+                            sleep 1
+                            if kill -0 "$pid" 2>/dev/null; then
+                                log "Process $pid still running, forcing termination"
+                                kill -9 "$pid" 2>>"$LOGFILE" || true
+                            fi
+                        else
+                            warning "Failed to terminate $proc (PID $pid)"
+                        fi
+                    else
+                        warning "Skipping termination of critical PID $pid for $proc"
+                    fi
+                done
+            fi
+        done
+    else
+        warning "pgrep not found, skipping residual NVIDIA process termination"
+    fi
+    
+    # Scarica i moduli NVIDIA
+    unload_nvidia_modules
+    
     local max_attempts=5
     local attempt=1
-    while [ $attempt -le $max_attempts ]; do
+    while [ $attempt -le "$max_attempts" ]; do
         if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
             warning "apt is locked, waiting... (attempt $attempt/$max_attempts)"
             sleep 5
@@ -255,9 +337,15 @@ remove_existing_packages() {
             continue
         fi
         
+        log "Executing apt-get purge for: $existing_packages"
         if ! apt-get purge -y --auto-remove $existing_packages 2>>"$LOGFILE"; then
             warning "Failed to remove some NVIDIA packages: $existing_packages"
             log "Error details: $(cat "$LOGFILE" | tail -n 10)"
+            # Tenta di forzare la rimozione dei file bloccati
+            if [ -f "/usr/share/nvidia/nvoptix.bin" ]; then
+                log "Attempting to force removal of /usr/share/nvidia/nvoptix.bin"
+                rm -f /usr/share/nvidia/nvoptix.bin 2>>"$LOGFILE" || true
+            fi
             return 1
         fi
         log "Successfully removed existing NVIDIA packages"
@@ -310,23 +398,21 @@ install_nvidia_driver() {
         done
     done
     
-    error "Failed to install any version of $package_name"
+    warning "Failed to install any version of $package_name"
+    return 1
 }
 
 main() {
     log "Starting NVIDIA driver alignment"
     
-    # Check for root privileges
     if [ "$(id -u)" -ne 0 ]; then
         error "This script must run as root"
     fi
     
-    # Check for apt lock
     if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
         error "apt is locked by another process"
     fi
     
-    # Controlla mount esterni
     local nvidia_mount_found=false
     for mount_path in "/usr/local/nvidia/lib" "/usr/local/nvidia/lib64" "/nvidia"; do
         if [ -d "$mount_path" ]; then
@@ -380,13 +466,16 @@ main() {
     
     local best_version
     if best_version=$(find_best_nvidia_version "$host_version" "$major_version"); then
-        install_nvidia_driver "$best_version" "$major_version"
-        
-        apt-get autoremove -y >/dev/null 2>>"$LOGFILE" || true
-        rm -rf /var/lib/apt/lists/*
-        
-        notify_user "NVIDIA driver successfully updated to $best_version" "normal" "dialog-information"
-        log "NVIDIA driver alignment completed successfully"
+        if install_nvidia_driver "$best_version" "$major_version"; then
+            apt-get autoremove -y >/dev/null 2>>"$LOGFILE" || true
+            rm -rf /var/lib/apt/lists/*
+            notify_user "NVIDIA driver successfully updated to $best_version" "normal" "dialog-information"
+            log "NVIDIA driver alignment completed successfully"
+        else
+            notify_user "Could not install NVIDIA driver version $best_version" "critical" "error"
+            warning "NVIDIA driver installation failed, continuing with existing drivers"
+            return 0
+        fi
     else
         notify_user "Could not find compatible NVIDIA driver version" "critical" "error"
         warning "NVIDIA driver alignment failed - applications may not work correctly"
@@ -401,7 +490,8 @@ main() {
             notify_user "Installed generic NVIDIA driver - some features may not work optimally" "normal" "dialog-warning"
         else
             notify_user "Could not install any NVIDIA driver" "critical" "error"
-            error "Failed to install any NVIDIA driver"
+            warning "Failed to install any NVIDIA driver, continuing with existing drivers"
+            return 0
         fi
     fi
 }

@@ -71,9 +71,9 @@ ENV CONTAINER_USERNAME=${CONTAINER_USERNAME} \
 
 # Metadata labels
 LABEL maintainer="manzolo@libero.it" \
-      description="Ubuntu container with GUI support, NVIDIA drivers, and s6-overlay" \
+      description="Ubuntu container with Wayland and NVIDIA drivers" \
       version="1.5" \
-      org.opencontainers.image.source="https://github.com/your-repo/docker-ubuntu-gui" \
+      org.opencontainers.image.source="https://github.com/your-repo/docker-ubuntu-wayland" \
       org.opencontainers.image.base.name="ubuntu:24.04" \
       org.opencontainers.image.architecture="amd64,arm64"
 
@@ -84,25 +84,20 @@ RUN apt-get update -qq && \
         sudo \
         tzdata \
         locales \
-        dbus-x11 \
-        gnome-icon-theme \
-        libcanberra-gtk-module \
-        libcanberra-gtk3-module \
         libgl1-mesa-dri \
         libnotify-bin \
-        x11-xserver-utils \
         vulkan-tools \
         pulseaudio \
         git \
         gnupg \
         iproute2 \
-        xz-utils && \
-    # Install Wayland support if enabled
-    if [ "$INSTALL_WAYLAND_SUPPORT" = "true" ]; then \
-        apt-get install -qqy --no-install-recommends \
-            qt6-wayland \
-            libdecor-0-plugin-1-cairo; \
-    fi && \
+        xz-utils \
+        qt6-wayland \
+        libdecor-0-plugin-1-cairo \
+        wayland-protocols \
+        libwayland-client0 \
+        libwayland-server0 \
+        libwayland-egl1 && \
     # Install NVIDIA drivers if enabled
     if [ "$INSTALL_NVIDIA_DRIVERS" = "true" ]; then \
         apt-get install -qqy --no-install-recommends software-properties-common && \
@@ -153,12 +148,15 @@ RUN mkdir -p /var/log/container && \
 COPY entrypoint.d /etc/entrypoint.d
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# Configure locale
-RUN locale-gen en_US.UTF-8
-ENV LANG=en_US.UTF-8 \
-    LANGUAGE=en_US:en \
-    LC_ALL=en_US.UTF-8
+ARG LANG=en_US.UTF-8
 
+# Configure locale
+RUN locale-gen ${LANG:-en_US.UTF-8}
+ENV LANG=${LANG:-en_US.UTF-8} \
+    LANGUAGE=${LANG:-en_US:en} \
+    LC_ALL=${LANG:-en_US.UTF-8}
+
+    
 # Switch to non-root user
 USER ${CONTAINER_USERNAME}
 WORKDIR /home/${CONTAINER_USERNAME}
@@ -167,11 +165,12 @@ WORKDIR /home/${CONTAINER_USERNAME}
 RUN mkdir -p .cache .config .local/share .local/bin && \
     touch .local/share/ubuntu-docker.log
 
-# Environment variables for XDG
+# Environment variables for XDG and Wayland
 ENV XDG_RUNTIME_DIR=/run/user/${CONTAINER_UID} \
     XDG_CONFIG_HOME=/home/${CONTAINER_USERNAME}/.config \
     XDG_CACHE_HOME=/home/${CONTAINER_USERNAME}/.cache \
-    XDG_DATA_HOME=/home/${CONTAINER_USERNAME}/.local/share
+    XDG_DATA_HOME=/home/${CONTAINER_USERNAME}/.local/share \
+    WAYLAND_DISPLAY=wayland-0
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
@@ -183,7 +182,7 @@ ENTRYPOINT ["/usr/local/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/bin/bash"]
 
 # Runtime instructions
-# To run with GPU and X11:
-# docker run --gpus all -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY ...
+# To run with GPU and Wayland:
+# docker run --gpus all -v $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY:/run/user/${CONTAINER_UID}/$WAYLAND_DISPLAY -e WAYLAND_DISPLAY=$WAYLAND_DISPLAY ...
 # To skip checksum validation during testing:
-# docker build --build-arg SKIP_CHECKSUM_VALIDATION=true -t my-ubuntu-gui .
+# docker build --build-arg SKIP_CHECKSUM_VALIDATION=true -t my-ubuntu-wayland .
